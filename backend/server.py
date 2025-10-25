@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import shutil
 import zipfile
 import aiofiles
+import re
 
 
 ROOT_DIR = Path(__file__).parent
@@ -54,6 +55,15 @@ class CategoryNames(BaseModel):
 class CategoryNamesUpdate(BaseModel):
     categories: Dict[str, str]
 
+class NamingFormat(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    format: str = "{site_id}_{category}_{component_name}"
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class NamingFormatUpdate(BaseModel):
+    format: str
+
 class UploadedImage(BaseModel):
     component_name: str
     filename: str
@@ -87,6 +97,22 @@ DEFAULT_COMPONENT_NAMES = [
     "Installation Label",
     "Safety Equipment"
 ]
+
+
+def apply_naming_format(format_str: str, site_id: str, category: str, component_name: str) -> str:
+    """Apply the naming format with the provided values"""
+    # Sanitize component name
+    safe_component = component_name.replace(' ', '_').replace('/', '_')
+    
+    # Replace placeholders
+    result = format_str.replace('{site_id}', site_id)
+    result = result.replace('{category}', category.lower())
+    result = result.replace('{component_name}', safe_component)
+    
+    # Remove any remaining invalid characters
+    result = re.sub(r'[^a-zA-Z0-9_-]', '_', result)
+    
+    return result
 
 
 @api_router.get("/")
@@ -149,6 +175,36 @@ async def update_category_names(input: CategoryNamesUpdate):
     return {"categories": input.categories, "message": "Category names updated successfully"}
 
 
+@api_router.get("/naming-format")
+async def get_naming_format():
+    """Get the current naming format"""
+    config = await db.naming_format.find_one({}, {"_id": 0})
+    if not config:
+        # Initialize with default
+        config_obj = NamingFormat()
+        doc = config_obj.model_dump()
+        doc['updated_at'] = doc['updated_at'].isoformat()
+        await db.naming_format.insert_one(doc)
+        return {"format": "{site_id}_{category}_{component_name}"}
+    return {"format": config.get('format', "{site_id}_{category}_{component_name}")}
+
+
+@api_router.put("/naming-format")
+async def update_naming_format(input: NamingFormatUpdate):
+    """Update the naming format"""
+    # Validate that format contains at least one placeholder
+    if not any(placeholder in input.format for placeholder in ['{site_id}', '{category}', '{component_name}']):
+        raise HTTPException(status_code=400, detail="Format must contain at least one placeholder: {site_id}, {category}, or {component_name}")
+    
+    config_obj = NamingFormat(format=input.format)
+    doc = config_obj.model_dump()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.naming_format.delete_many({})
+    await db.naming_format.insert_one(doc)
+    return {"format": input.format, "message": "Naming format updated successfully"}
+
+
 @api_router.post("/sites/{site_id}/upload")
 async def upload_image(
     site_id: str,
@@ -160,16 +216,20 @@ async def upload_image(
     if category.lower() not in ['alpha', 'beta', 'gamma']:
         raise HTTPException(status_code=400, detail="Category must be alpha, beta, or gamma")
     
+    # Get naming format
+    naming_config = await db.naming_format.find_one({}, {"_id": 0})
+    format_str = naming_config.get('format', "{site_id}_{category}_{component_name}") if naming_config else "{site_id}_{category}_{component_name}"
+    
     # Create directory structure
     site_dir = UPLOADS_DIR / site_id / category.lower()
     site_dir.mkdir(parents=True, exist_ok=True)
     
     # Get file extension
     ext = Path(file.filename).suffix
-    # Sanitize component name for filename
-    safe_component_name = component_name.replace(' ', '_').replace('/', '_')
-    # New format: {site_id}_{category}_{component_name}.ext
-    new_filename = f"{site_id}_{category.lower()}_{safe_component_name}{ext}"
+    
+    # Apply naming format
+    filename_without_ext = apply_naming_format(format_str, site_id, category, component_name)
+    new_filename = f"{filename_without_ext}{ext}"
     
     file_path = site_dir / new_filename
     

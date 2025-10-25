@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Download, Edit, Upload, ArrowLeft, X, Plus, Trash2, Edit2 } from 'lucide-react';
+import { Download, Edit, Upload, ArrowLeft, X, Plus, Trash2, Edit2, FileText } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 
@@ -16,14 +16,18 @@ const UploadPage = () => {
   const [uploadedImages, setUploadedImages] = useState({});
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isCategoryEditModalOpen, setIsCategoryEditModalOpen] = useState(false);
+  const [isNamingFormatModalOpen, setIsNamingFormatModalOpen] = useState(false);
   const [editableNames, setEditableNames] = useState([]);
   const [editableCategoryNames, setEditableCategoryNames] = useState({});
+  const [namingFormat, setNamingFormat] = useState('{site_id}_{category}_{component_name}');
+  const [editableNamingFormat, setEditableNamingFormat] = useState('');
   const [draggedIndex, setDraggedIndex] = useState(null);
   const fileInputRefs = useRef({});
 
   useEffect(() => {
     fetchComponentNames();
     fetchCategoryNames();
+    fetchNamingFormat();
   }, []);
 
   useEffect(() => {
@@ -50,6 +54,16 @@ const UploadPage = () => {
       setEditableCategoryNames(response.data.categories);
     } catch (error) {
       console.error('Error fetching category names:', error);
+    }
+  };
+
+  const fetchNamingFormat = async () => {
+    try {
+      const response = await axios.get(`${API}/naming-format`);
+      setNamingFormat(response.data.format);
+      setEditableNamingFormat(response.data.format);
+    } catch (error) {
+      console.error('Error fetching naming format:', error);
     }
   };
 
@@ -162,6 +176,21 @@ const UploadPage = () => {
     }
   };
 
+  const handleSaveNamingFormat = async () => {
+    try {
+      await axios.put(`${API}/naming-format`, {
+        format: editableNamingFormat,
+      });
+      
+      setNamingFormat(editableNamingFormat);
+      setIsNamingFormatModalOpen(false);
+      toast.success('Naming format updated successfully');
+    } catch (error) {
+      console.error('Error updating naming format:', error);
+      toast.error(error.response?.data?.detail || 'Failed to update naming format');
+    }
+  };
+
   const handleAddComponent = () => {
     const newName = `New Component ${editableNames.length + 1}`;
     setEditableNames([...editableNames, newName]);
@@ -174,6 +203,19 @@ const UploadPage = () => {
     }
     const newNames = editableNames.filter((_, i) => i !== index);
     setEditableNames(newNames);
+  };
+
+  const insertPlaceholder = (placeholder) => {
+    setEditableNamingFormat(editableNamingFormat + placeholder);
+  };
+
+  const getPreviewFilename = () => {
+    let preview = editableNamingFormat;
+    preview = preview.replace(/{site_id}/g, siteId);
+    preview = preview.replace(/{category}/g, activeCategory);
+    preview = preview.replace(/{component_name}/g, 'Antenna_Front_View');
+    preview = preview.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return preview + '.jpg';
   };
 
   const getImageUrl = (componentName) => {
@@ -211,6 +253,14 @@ const UploadPage = () => {
           </p>
         </div>
         <div className="header-actions">
+          <button
+            className="action-btn edit-btn"
+            onClick={() => setIsNamingFormatModalOpen(true)}
+            data-testid="edit-naming-format-btn"
+          >
+            <FileText size={18} />
+            File Naming
+          </button>
           <button
             className="action-btn edit-btn"
             onClick={() => setIsCategoryEditModalOpen(true)}
@@ -489,6 +539,121 @@ const UploadPage = () => {
                 className="action-btn save-btn"
                 onClick={handleSaveCategoryNames}
                 data-testid="save-category-names-btn"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Naming Format Modal */}
+      {isNamingFormatModalOpen && (
+        <div className="edit-modal-overlay" onClick={() => setIsNamingFormatModalOpen(false)} data-testid="naming-format-modal-overlay">
+          <div className="edit-modal" onClick={(e) => e.stopPropagation()} data-testid="naming-format-modal">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2>Edit File Naming Format</h2>
+              <button
+                onClick={() => setIsNamingFormatModalOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#718096',
+                }}
+                data-testid="close-naming-modal-btn"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', fontSize: '0.9rem', fontWeight: '600', color: '#2d3748', marginBottom: '0.5rem' }}>
+                Naming Format
+              </label>
+              <input
+                type="text"
+                className="component-name-input"
+                value={editableNamingFormat}
+                onChange={(e) => setEditableNamingFormat(e.target.value)}
+                placeholder="e.g., {site_id}_{category}_{component_name}"
+                data-testid="naming-format-input"
+                style={{ width: '100%' }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <p style={{ fontSize: '0.85rem', fontWeight: '600', color: '#2d3748', marginBottom: '0.5rem' }}>Available Placeholders:</p>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {['{site_id}', '{category}', '{component_name}'].map((placeholder) => (
+                  <button
+                    key={placeholder}
+                    onClick={() => insertPlaceholder(placeholder)}
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      background: '#edf2f7',
+                      border: '1px solid #cbd5e0',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.background = '#e2e8f0';
+                      e.target.style.borderColor = '#3182ce';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.background = '#edf2f7';
+                      e.target.style.borderColor = '#cbd5e0';
+                    }}
+                  >
+                    {placeholder}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{
+              padding: '1rem',
+              background: '#f7fafc',
+              borderRadius: '8px',
+              marginBottom: '1rem',
+              border: '1px solid #e2e8f0'
+            }}>
+              <p style={{ fontSize: '0.85rem', fontWeight: '600', color: '#2d3748', marginBottom: '0.5rem' }}>Preview:</p>
+              <p style={{ fontSize: '0.9rem', fontFamily: 'monospace', color: '#3182ce', wordBreak: 'break-all' }}>
+                {getPreviewFilename()}
+              </p>
+            </div>
+
+            <div style={{
+              padding: '0.75rem',
+              background: '#fff5e6',
+              borderRadius: '8px',
+              fontSize: '0.8rem',
+              color: '#744210',
+              marginBottom: '1rem',
+              lineHeight: '1.4'
+            }}>
+              <strong>Note:</strong> Use placeholders to customize how files are named. Spaces will be replaced with underscores.
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="action-btn cancel-btn"
+                onClick={() => {
+                  setEditableNamingFormat(namingFormat);
+                  setIsNamingFormatModalOpen(false);
+                }}
+                data-testid="cancel-naming-edit-btn"
+              >
+                Cancel
+              </button>
+              <button
+                className="action-btn save-btn"
+                onClick={handleSaveNamingFormat}
+                data-testid="save-naming-format-btn"
               >
                 Save Changes
               </button>
