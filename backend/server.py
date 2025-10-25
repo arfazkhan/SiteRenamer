@@ -168,8 +168,8 @@ async def upload_image(
     ext = Path(file.filename).suffix
     # Sanitize component name for filename
     safe_component_name = component_name.replace(' ', '_').replace('/', '_')
-    # New format: {site_id}_{component_name}.ext
-    new_filename = f"{site_id}_{safe_component_name}{ext}"
+    # New format: {site_id}_{category}_{component_name}.ext
+    new_filename = f"{site_id}_{category.lower()}_{safe_component_name}{ext}"
     
     file_path = site_dir / new_filename
     
