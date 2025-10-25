@@ -238,6 +238,9 @@ async def download_site_images(site_id: str):
 # Include the router in the main app
 app.include_router(api_router)
 
+# Mount static files for serving uploaded images
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
