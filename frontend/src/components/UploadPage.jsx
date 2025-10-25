@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Download, Edit, Upload, ArrowLeft, X } from 'lucide-react';
+import { Download, Edit, Upload, ArrowLeft, X, Plus, Trash2, Edit2 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 
@@ -12,14 +12,18 @@ const UploadPage = () => {
   const navigate = useNavigate();
   const [activeCategory, setActiveCategory] = useState('alpha');
   const [componentNames, setComponentNames] = useState([]);
+  const [categoryNames, setCategoryNames] = useState({ alpha: 'Alpha', beta: 'Beta', gamma: 'Gamma' });
   const [uploadedImages, setUploadedImages] = useState({});
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCategoryEditModalOpen, setIsCategoryEditModalOpen] = useState(false);
   const [editableNames, setEditableNames] = useState([]);
+  const [editableCategoryNames, setEditableCategoryNames] = useState({});
   const [draggedIndex, setDraggedIndex] = useState(null);
   const fileInputRefs = useRef({});
 
   useEffect(() => {
     fetchComponentNames();
+    fetchCategoryNames();
   }, []);
 
   useEffect(() => {
@@ -36,6 +40,16 @@ const UploadPage = () => {
     } catch (error) {
       console.error('Error fetching component names:', error);
       toast.error('Failed to load component names');
+    }
+  };
+
+  const fetchCategoryNames = async () => {
+    try {
+      const response = await axios.get(`${API}/category-names`);
+      setCategoryNames(response.data.categories);
+      setEditableCategoryNames(response.data.categories);
+    } catch (error) {
+      console.error('Error fetching category names:', error);
     }
   };
 
@@ -133,6 +147,35 @@ const UploadPage = () => {
     }
   };
 
+  const handleSaveCategoryNames = async () => {
+    try {
+      await axios.put(`${API}/category-names`, {
+        categories: editableCategoryNames,
+      });
+      
+      setCategoryNames(editableCategoryNames);
+      setIsCategoryEditModalOpen(false);
+      toast.success('Category names updated successfully');
+    } catch (error) {
+      console.error('Error updating category names:', error);
+      toast.error('Failed to update category names');
+    }
+  };
+
+  const handleAddComponent = () => {
+    const newName = `New Component ${editableNames.length + 1}`;
+    setEditableNames([...editableNames, newName]);
+  };
+
+  const handleRemoveComponent = (index) => {
+    if (editableNames.length <= 1) {
+      toast.error('Must have at least one component');
+      return;
+    }
+    const newNames = editableNames.filter((_, i) => i !== index);
+    setEditableNames(newNames);
+  };
+
   const getImageUrl = (componentName) => {
     const filename = uploadedImages[componentName];
     if (!filename) return null;
@@ -170,11 +213,19 @@ const UploadPage = () => {
         <div className="header-actions">
           <button
             className="action-btn edit-btn"
+            onClick={() => setIsCategoryEditModalOpen(true)}
+            data-testid="edit-category-names-btn"
+          >
+            <Edit2 size={18} />
+            Edit Categories
+          </button>
+          <button
+            className="action-btn edit-btn"
             onClick={() => setIsEditModalOpen(true)}
             data-testid="edit-component-names-btn"
           >
             <Edit size={18} />
-            Edit Component Names
+            Edit Components
           </button>
           <button
             className="action-btn download-btn"
@@ -196,7 +247,7 @@ const UploadPage = () => {
               onClick={() => setActiveCategory(category)}
               data-testid={`category-tab-${category}`}
             >
-              {category.charAt(0).toUpperCase() + category.slice(1)}
+              {categoryNames[category] || category.charAt(0).toUpperCase() + category.slice(1)}
             </button>
           ))}
         </div>
@@ -210,7 +261,7 @@ const UploadPage = () => {
                   <span className="component-label" data-testid={`component-label-${index}`}>
                     {componentName}
                   </span>
-                  <span className="component-number">{index + 1}/13</span>
+                  <span className="component-number">{index + 1}/{componentNames.length}</span>
                 </div>
                 <div
                   className={`drop-zone ${draggedIndex === index ? 'drag-over' : ''} ${imageUrl ? 'has-image' : ''}`}
@@ -274,6 +325,7 @@ const UploadPage = () => {
         </div>
       </div>
 
+      {/* Edit Component Names Modal */}
       {isEditModalOpen && (
         <div className="edit-modal-overlay" onClick={() => setIsEditModalOpen(false)} data-testid="edit-modal-overlay">
           <div className="edit-modal" onClick={(e) => e.stopPropagation()} data-testid="edit-modal">
@@ -307,9 +359,59 @@ const UploadPage = () => {
                     }}
                     data-testid={`edit-component-name-input-${index}`}
                   />
+                  <button
+                    onClick={() => handleRemoveComponent(index)}
+                    style={{
+                      background: '#fed7d7',
+                      color: '#c53030',
+                      border: 'none',
+                      borderRadius: '6px',
+                      padding: '0.5rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      transition: 'background 0.2s',
+                    }}
+                    data-testid={`remove-component-btn-${index}`}
+                    onMouseEnter={(e) => e.target.style.background = '#fc8181'}
+                    onMouseLeave={(e) => e.target.style.background = '#fed7d7'}
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               ))}
             </div>
+            <button
+              onClick={handleAddComponent}
+              style={{
+                width: '100%',
+                marginTop: '1rem',
+                padding: '0.75rem',
+                background: '#edf2f7',
+                color: '#2d3748',
+                border: '2px dashed #cbd5e0',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '600',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                transition: 'all 0.2s',
+              }}
+              data-testid="add-component-btn"
+              onMouseEnter={(e) => {
+                e.target.style.background = '#e2e8f0';
+                e.target.style.borderColor = '#3182ce';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.background = '#edf2f7';
+                e.target.style.borderColor = '#cbd5e0';
+              }}
+            >
+              <Plus size={18} />
+              Add Component
+            </button>
             <div className="modal-actions">
               <button
                 className="action-btn cancel-btn"
@@ -325,6 +427,68 @@ const UploadPage = () => {
                 className="action-btn save-btn"
                 onClick={handleSaveComponentNames}
                 data-testid="save-component-names-btn"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Category Names Modal */}
+      {isCategoryEditModalOpen && (
+        <div className="edit-modal-overlay" onClick={() => setIsCategoryEditModalOpen(false)} data-testid="category-edit-modal-overlay">
+          <div className="edit-modal" onClick={(e) => e.stopPropagation()} data-testid="category-edit-modal">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2>Edit Category Names</h2>
+              <button
+                onClick={() => setIsCategoryEditModalOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#718096',
+                }}
+                data-testid="close-category-modal-btn"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            <div className="component-name-list">
+              {['alpha', 'beta', 'gamma'].map((key, index) => (
+                <div key={key} className="component-name-item">
+                  <span className="component-name-number">{index + 1}.</span>
+                  <input
+                    type="text"
+                    className="component-name-input"
+                    value={editableCategoryNames[key] || ''}
+                    onChange={(e) => {
+                      setEditableCategoryNames({
+                        ...editableCategoryNames,
+                        [key]: e.target.value
+                      });
+                    }}
+                    placeholder={`Category ${index + 1}`}
+                    data-testid={`edit-category-name-input-${key}`}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="modal-actions" style={{ marginTop: '1.5rem' }}>
+              <button
+                className="action-btn cancel-btn"
+                onClick={() => {
+                  setEditableCategoryNames(categoryNames);
+                  setIsCategoryEditModalOpen(false);
+                }}
+                data-testid="cancel-category-edit-btn"
+              >
+                Cancel
+              </button>
+              <button
+                className="action-btn save-btn"
+                onClick={handleSaveCategoryNames}
+                data-testid="save-category-names-btn"
               >
                 Save Changes
               </button>

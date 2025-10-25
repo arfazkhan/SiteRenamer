@@ -8,7 +8,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone
 import shutil
@@ -44,6 +44,15 @@ class ComponentNames(BaseModel):
 
 class ComponentNamesUpdate(BaseModel):
     names: List[str]
+
+class CategoryNames(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    categories: Dict[str, str] = {"alpha": "Alpha", "beta": "Beta", "gamma": "Gamma"}
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class CategoryNamesUpdate(BaseModel):
+    categories: Dict[str, str]
 
 class UploadedImage(BaseModel):
     component_name: str
@@ -102,8 +111,8 @@ async def get_component_names():
 @api_router.put("/component-names")
 async def update_component_names(input: ComponentNamesUpdate):
     """Update the list of component names"""
-    if len(input.names) != 13:
-        raise HTTPException(status_code=400, detail="Must provide exactly 13 component names")
+    if len(input.names) < 1:
+        raise HTTPException(status_code=400, detail="Must provide at least 1 component name")
     
     config_obj = ComponentNames(names=input.names)
     doc = config_obj.model_dump()
@@ -112,6 +121,32 @@ async def update_component_names(input: ComponentNamesUpdate):
     await db.component_names.delete_many({})
     await db.component_names.insert_one(doc)
     return {"names": input.names, "message": "Component names updated successfully"}
+
+
+@api_router.get("/category-names")
+async def get_category_names():
+    """Get the current category names"""
+    config = await db.category_names.find_one({}, {"_id": 0})
+    if not config:
+        # Initialize with defaults
+        config_obj = CategoryNames()
+        doc = config_obj.model_dump()
+        doc['updated_at'] = doc['updated_at'].isoformat()
+        await db.category_names.insert_one(doc)
+        return {"categories": {"alpha": "Alpha", "beta": "Beta", "gamma": "Gamma"}}
+    return {"categories": config.get('categories', {"alpha": "Alpha", "beta": "Beta", "gamma": "Gamma"})}
+
+
+@api_router.put("/category-names")
+async def update_category_names(input: CategoryNamesUpdate):
+    """Update the category names"""
+    config_obj = CategoryNames(categories=input.categories)
+    doc = config_obj.model_dump()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.category_names.delete_many({})
+    await db.category_names.insert_one(doc)
+    return {"categories": input.categories, "message": "Category names updated successfully"}
 
 
 @api_router.post("/sites/{site_id}/upload")
@@ -133,7 +168,8 @@ async def upload_image(
     ext = Path(file.filename).suffix
     # Sanitize component name for filename
     safe_component_name = component_name.replace(' ', '_').replace('/', '_')
-    new_filename = f"{safe_component_name}{ext}"
+    # New format: {site_id}_{component_name}.ext
+    new_filename = f"{site_id}_{safe_component_name}{ext}"
     
     file_path = site_dir / new_filename
     
@@ -170,6 +206,13 @@ async def upload_image(
         for cat in site.get('categories', []):
             if cat['category'] == category.lower():
                 # Remove old image for this component if exists
+                old_images = [img for img in cat['images'] if img['component_name'] == component_name]
+                if old_images:
+                    # Delete old file
+                    old_file_path = site_dir / old_images[0]['filename']
+                    if old_file_path.exists():
+                        old_file_path.unlink()
+                
                 cat['images'] = [img for img in cat['images'] if img['component_name'] != component_name]
                 cat['images'].append(uploaded_image)
                 category_found = True
