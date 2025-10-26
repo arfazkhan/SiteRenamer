@@ -425,9 +425,20 @@ async def download_site_images(site_id: str):
 app.include_router(api_router)
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
+# Determine whether to allow credentials based on the provided origins. Browsers
+# block Access-Control-Allow-Origin: * when credentials are allowed. If the
+# configured origins are wildcard, we disable credentials to avoid invalid CORS
+# responses. For stricter security, set CORS_ORIGINS to the exact frontend origin
+# (e.g. https://site-renamer.vercel.app) in the environment.
+allow_credentials_flag = True
+if len(CORS_ORIGINS) == 1 and CORS_ORIGINS[0] == '*':
+    allow_credentials_flag = False
+
+logger.info("Configured CORS_ORIGINS=%s allow_credentials=%s", CORS_ORIGINS, allow_credentials_flag)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
+    allow_credentials=allow_credentials_flag,
     allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
