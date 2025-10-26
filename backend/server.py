@@ -94,6 +94,32 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
+
+@app.middleware("http")
+async def ensure_mongo_client_middleware(request, call_next):
+    """Middleware to make the Motor client resilient in serverless environments.
+
+    Some serverless invocations reuse process state where an AsyncIOMotorClient
+    may be bound to a previous/closed event loop. This middleware pings the
+    client and on failure recreates the global `client` and `db` objects so
+    handlers can continue to use the `db` variable defined at module level.
+    """
+    global client, db
+    try:
+        # quick ping; if it raises we'll recreate the client
+        await client.admin.command("ping")
+    except Exception as e:
+        logger.warning("MongoDB ping failed in middleware (%s). Recreating client.", e)
+        try:
+            client.close()
+        except Exception:
+            pass
+        # Recreate client bound to the current event loop
+        client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
+        db = client[db_name]
+    response = await call_next(request)
+    return response
+
 # Create uploads directory
 UPLOADS_DIR = ROOT_DIR / 'uploads'
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
