@@ -14,6 +14,7 @@ import re
 import aiofiles
 import zipfile
 import logging
+from contextlib import asynccontextmanager
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -61,7 +62,30 @@ if raw_cors.strip() == '*' or raw_cors.strip() == '':
 else:
     CORS_ORIGINS = [o.strip() for o in raw_cors.split(',') if o.strip()]
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Verify DB connection and prepare indexes at startup
+    try:
+        await client.admin.command("ping")
+        logger.info("Connected to MongoDB (%s)", db_name)
+        # Ensure an index on site_id exists for quick lookups (idempotent)
+        try:
+            await db.sites.create_index("site_id", unique=True)
+            logger.info("Ensured index on sites.site_id")
+        except Exception:
+            logger.exception("Could not create index on sites.site_id (may already exist or insufficient permissions)")
+    except Exception as e:
+        logger.exception("Failed to connect to MongoDB: %s", e)
+        # re-raise to stop startup
+        raise
+
+    try:
+        yield
+    finally:
+        # Clean shutdown
+        client.close()
+
+app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 # Create uploads directory
@@ -409,22 +433,4 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def verify_db_connection():
-    try:
-        await client.admin.command("ping")
-        logger.info("Connected to MongoDB (%s)", db_name)
-        # Ensure an index on site_id exists for quick lookups (idempotent)
-        try:
-            await db.sites.create_index("site_id", unique=True)
-            logger.info("Ensured index on sites.site_id")
-        except Exception:
-            logger.exception("Could not create index on sites.site_id (may already exist or insufficient permissions)")
-    except Exception as e:
-        logger.exception("Failed to connect to MongoDB: %s", e)
-        raise
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+# Startup/shutdown are handled by the `lifespan` context manager defined near app creation.
