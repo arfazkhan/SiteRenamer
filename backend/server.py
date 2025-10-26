@@ -14,6 +14,7 @@ import re
 import aiofiles
 import zipfile
 import logging
+import tempfile
 from contextlib import asynccontextmanager
 
 ROOT_DIR = Path(__file__).parent
@@ -121,7 +122,14 @@ async def ensure_mongo_client_middleware(request, call_next):
     return response
 
 # Create uploads directory
-UPLOADS_DIR = ROOT_DIR / 'uploads'
+VERCEL_DETECTED = bool(os.environ.get('VERCEL') or os.environ.get('VERCEL_URL') or os.environ.get('VERCEL_ENV') or os.environ.get('NOW_REGION'))
+
+# Use ephemeral /tmp when running on Vercel (no persistent writable project dir there)
+if VERCEL_DETECTED:
+    UPLOADS_DIR = Path(os.environ.get('UPLOADS_DIR', tempfile.gettempdir())) / 'site_renamer_uploads'
+else:
+    UPLOADS_DIR = ROOT_DIR / 'uploads'
+
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Models
