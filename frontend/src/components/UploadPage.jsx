@@ -4,7 +4,7 @@ import { Download, Edit, Upload, ArrowLeft, X, Plus, Trash2, Edit2, FileText } f
 import axios from 'axios';
 import { toast } from 'sonner';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = (process.env.REACT_APP_BACKEND_URL || '').replace(/\/+$/g, '');
 const API = `${BACKEND_URL}/api`;
 
 const UploadPage = () => {

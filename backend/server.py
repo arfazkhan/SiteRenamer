@@ -58,7 +58,8 @@ ALLOWED_EXTENSIONS = set(x.lower() for x in os.environ.get('ALLOWED_EXTENSIONS',
 # Parse CORS origins (comma-separated). Empty or '*' => allow all
 raw_cors = os.environ.get('CORS_ORIGINS', '*')
 if raw_cors.strip() == '*' or raw_cors.strip() == '':
-    CORS_ORIGINS: Iterable[str] | str = '*'
+    # Use a list with '*' so Starlette's CORSMiddleware understands "allow all"
+    CORS_ORIGINS: Iterable[str] = ["*"]
 else:
     CORS_ORIGINS = [o.strip() for o in raw_cors.split(',') if o.strip()]
 
