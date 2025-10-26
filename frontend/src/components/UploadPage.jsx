@@ -211,10 +211,14 @@ const UploadPage = () => {
 
   const getPreviewFilename = () => {
     let preview = editableNamingFormat;
+    // Use the configured/display category name if available, otherwise fall back to the key
+    const displayCategory = categoryNames[activeCategory] || activeCategory;
     preview = preview.replace(/{site_id}/g, siteId);
-    preview = preview.replace(/{category}/g, activeCategory);
-    preview = preview.replace(/{component_name}/g, 'Antenna_Front_View');
-    preview = preview.replace(/[^a-zA-Z0-9_-]/g, '_');
+    preview = preview.replace(/{category}/g, displayCategory);
+    // Use a human-readable example component name with spaces preserved
+    preview = preview.replace(/{component_name}/g, 'Antenna Front View');
+    // Normalize characters to a safe filename but allow spaces in component names
+    preview = preview.replace(/[^a-zA-Z0-9_\- ]/g, '_');
     return preview + '.jpg';
   };
 

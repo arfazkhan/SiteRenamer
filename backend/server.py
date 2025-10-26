@@ -116,18 +116,29 @@ DEFAULT_COMPONENT_NAMES = [
 
 def apply_naming_format(format_str: str, site_id: str, category: str, component_name: str) -> str:
     """Apply the naming format with the provided values"""
-    safe_component = component_name.replace(' ', '_').replace('/', '_')
-    result = format_str.replace('{site_id}', site_id)
-    result = result.replace('{category}', category.lower())
+    # For filenames we want to preserve spaces inside component names (per UX request)
+    # but keep site_id and category compact (replace spaces with underscores).
+    safe_site_id = site_id.replace(' ', '_')
+    safe_category = category.replace(' ', '_').replace('/', '_')
+    # For component names: keep spaces but normalize slashes; other disallowed
+    # characters will be replaced below while allowing spaces to remain.
+    safe_component = component_name.replace('/', '_')
+
+    result = format_str.replace('{site_id}', safe_site_id)
+    result = result.replace('{category}', safe_category)
     result = result.replace('{component_name}', safe_component)
-    result = re.sub(r'[^a-zA-Z0-9_-]', '_', result)
+    # Replace any remaining disallowed characters with underscores, but allow spaces
+    # so component names keep their spaces.
+    result = re.sub(r'[^a-zA-Z0-9_\- ]', '_', result)
     return result
 
 
 def _sanitize_filename(name: str) -> str:
     # Keep letters, numbers, dash, underscore and dot (for ext). Replace others with underscore
     name = os.path.basename(name)
-    name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+    # Allow spaces in filenames so component names can retain spaces.
+    # Replace other disallowed characters with underscore.
+    name = re.sub(r'[^a-zA-Z0-9 ._-]', '_', name)
     # Prevent names starting with dot
     if name.startswith('.'):
         name = name.lstrip('.')
@@ -226,8 +237,15 @@ async def upload_image(
     incoming_ext = Path(file.filename).suffix.lower()
     if incoming_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"File type not allowed: {incoming_ext}")
+    # Determine the display label for the category (if configured) and use that in file names.
+    # The storage layout continues to use the lowercase category key.
+    category_config = await db.category_names.find_one({}, {"_id": 0})
+    if category_config and isinstance(category_config.get('categories', {}), dict):
+        display_category = category_config.get('categories', {}).get(category.lower(), category)
+    else:
+        display_category = category
 
-    filename_without_ext = apply_naming_format(format_str, site_id, category, component_name)
+    filename_without_ext = apply_naming_format(format_str, site_id, display_category, component_name)
     safe_filename_base = _sanitize_filename(filename_without_ext)
     new_filename = f"{safe_filename_base}{incoming_ext}"
     file_path = site_dir / new_filename
@@ -312,13 +330,48 @@ async def download_site_images(site_id: str):
     # Overwrite if exists
     if zip_path.exists():
         zip_path.unlink()
+    # Build the ZIP using the site's metadata so filenames in the archive reflect
+    # the current naming format and display category names (even if stored files
+    # on disk used older naming rules).
+    naming_cfg = await db.naming_format.find_one({}, {"_id": 0})
+    format_str = naming_cfg.get('format', "{site_id}_{category}_{component_name}") if naming_cfg else "{site_id}_{category}_{component_name}"
+    site = await db.sites.find_one({"site_id": site_id}, {"_id": 0})
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, _, files in os.walk(site_dir):
-            for fname in files:
-                full = Path(root) / fname
-                # Keep the archive paths relative to the site's directory
-                arcname = full.relative_to(site_dir)
-                zipf.write(full, arcname)
+        if site:
+            # Iterate categories and images from metadata so we can compute archive names
+            for cat in site.get('categories', []):
+                cat_key = cat.get('category')
+                # Determine display category if configured
+                category_config = await db.category_names.find_one({}, {"_id": 0})
+                if category_config and isinstance(category_config.get('categories', {}), dict):
+                    display_category = category_config.get('categories', {}).get(cat_key, cat_key)
+                else:
+                    display_category = cat_key
+
+                for img in cat.get('images', []):
+                    fname_on_disk = img.get('filename')
+                    comp_name = img.get('component_name')
+                    file_path = site_dir / cat_key / fname_on_disk
+                    if not file_path.exists():
+                        # skip missing files
+                        continue
+                        # Compute the desired archive filename using current naming format
+                        expected_base = apply_naming_format(format_str, site_id, display_category, comp_name)
+                        expected_safe = _sanitize_filename(expected_base) + Path(fname_on_disk).suffix
+                        # Use the display category as the folder name inside the archive so
+                        # edited category names (e.g., "-1") appear in the ZIP instead of the
+                        # internal key (e.g., "alpha"). Sanitize the display label for folder
+                        # naming (replace slashes and spaces with underscores).
+                        safe_display_folder = str(display_category).replace('/', '_').replace(' ', '_')
+                        arcname = Path(safe_display_folder) / expected_safe
+                    zipf.write(file_path, arcname)
+        else:
+            # Fallback: include all files on disk in their current layout
+            for root, _, files in os.walk(site_dir):
+                for fname in files:
+                    full = Path(root) / fname
+                    arcname = full.relative_to(site_dir)
+                    zipf.write(full, arcname)
     return FileResponse(
         path=zip_path,
         filename=f"{site_id}_images.zip",
