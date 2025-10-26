@@ -15,6 +15,14 @@ if (!BACKEND_URL) {
 }
 const API = `${BACKEND_URL}/api`;
 
+// Components that are common across all categories
+const COMMON_COMPONENTS = [
+  'CPRI Termination At CSS',
+  'MCB Termination',
+  'Roxtec',
+  'Tower Photo'
+];
+
 const UploadPage = () => {
   const { siteId } = useParams();
   const navigate = useNavigate();
@@ -30,6 +38,7 @@ const UploadPage = () => {
   const [namingFormat, setNamingFormat] = useState('{site_id}_{category}_{component_name}');
   const [editableNamingFormat, setEditableNamingFormat] = useState('');
   const [draggedIndex, setDraggedIndex] = useState(null);
+  const [uploadToAllCategories, setUploadToAllCategories] = useState({});
   const fileInputRefs = useRef({});
 
   useEffect(() => {
@@ -94,19 +103,32 @@ const UploadPage = () => {
     const formData = new FormData();
     formData.append('file', file);
 
+    // Check if this component should be uploaded to all categories
+    const shouldUploadToAll = uploadToAllCategories[componentName];
+    const categories = shouldUploadToAll ? ['alpha', 'beta', 'gamma'] : [activeCategory];
+
     try {
-      await axios.post(
-        `${API}/sites/${siteId}/upload?category=${activeCategory}&component_name=${encodeURIComponent(componentName)}`,
-        formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        }
-      );
+      // Upload to each category
+      for (const category of categories) {
+        await axios.post(
+          `${API}/sites/${siteId}/upload?category=${category}&component_name=${encodeURIComponent(componentName)}`,
+          formData,
+          {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+          }
+        );
+      }
       
-      toast.success(`${componentName} uploaded successfully`);
-      fetchCategoryImages(activeCategory);
+      if (shouldUploadToAll) {
+        toast.success(`${componentName} uploaded to all categories successfully`);
+        // Refresh images for all categories if needed
+        fetchCategoryImages(activeCategory);
+      } else {
+        toast.success(`${componentName} uploaded successfully`);
+        fetchCategoryImages(activeCategory);
+      }
     } catch (error) {
       console.error('Error uploading file:', error);
       toast.error('Failed to upload image');
@@ -317,6 +339,7 @@ const UploadPage = () => {
         <div className="images-grid">
           {componentNames.map((componentName, index) => {
             const imageUrl = getImageUrl(componentName);
+            const isCommonComponent = COMMON_COMPONENTS.includes(componentName);
             return (
               <div key={index} className="image-card" data-testid={`image-card-${index}`}>
                 <div className="component-label-container">
@@ -325,6 +348,46 @@ const UploadPage = () => {
                   </span>
                   <span className="component-number">{index + 1}/{componentNames.length}</span>
                 </div>
+                {isCommonComponent && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.5rem 1rem',
+                    background: '#edf2f7',
+                    borderRadius: '6px',
+                    marginBottom: '0.5rem',
+                    fontSize: '0.875rem'
+                  }}>
+                    <input
+                      type="checkbox"
+                      id={`upload-all-${index}`}
+                      checked={uploadToAllCategories[componentName] || false}
+                      onChange={(e) => {
+                        setUploadToAllCategories(prev => ({
+                          ...prev,
+                          [componentName]: e.target.checked
+                        }));
+                      }}
+                      style={{
+                        width: '16px',
+                        height: '16px',
+                        cursor: 'pointer'
+                      }}
+                      data-testid={`upload-all-toggle-${index}`}
+                    />
+                    <label
+                      htmlFor={`upload-all-${index}`}
+                      style={{
+                        cursor: 'pointer',
+                        color: '#4a5568',
+                        fontWeight: '500'
+                      }}
+                    >
+                      Upload to all categories
+                    </label>
+                  </div>
+                )}
                 <div
                   className={`drop-zone ${draggedIndex === index ? 'drag-over' : ''} ${imageUrl ? 'has-image' : ''}`}
                   onDrop={(e) => handleDrop(e, componentName)}
