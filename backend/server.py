@@ -4,39 +4,54 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict
-import uuid
+from typing import List, Optional, Dict, Iterable
 from datetime import datetime, timezone
-import shutil
-import zipfile
-import aiofiles
+import os
+import uuid
 import re
-
+import aiofiles
+import zipfile
+import logging
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Configure logging early
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# MongoDB connection (Atlas-compatible)
+mongo_url = os.environ.get('MONGO_URL')
+if not mongo_url:
+    raise RuntimeError("MONGO_URL not set. Add your MongoDB Atlas connection string to backend/.env")
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
+db_name = os.environ.get('DB_NAME', 'site_renamer')
+db = client[db_name]
+
+# Production / operational settings (can be tuned via env)
+MAX_UPLOAD_SIZE = int(os.environ.get('MAX_UPLOAD_SIZE', 10 * 1024 * 1024))  # 10 MiB default
+ALLOWED_EXTENSIONS = set(x.lower() for x in os.environ.get('ALLOWED_EXTENSIONS', '.jpg,.jpeg,.png,.gif,.bmp,.tiff').split(','))
+
+# Parse CORS origins (comma-separated). Empty or '*' => allow all
+raw_cors = os.environ.get('CORS_ORIGINS', '*')
+if raw_cors.strip() == '*' or raw_cors.strip() == '':
+    CORS_ORIGINS: Iterable[str] | str = '*'
+else:
+    CORS_ORIGINS = [o.strip() for o in raw_cors.split(',') if o.strip()]
+
+app = FastAPI()
+api_router = APIRouter(prefix="/api")
 
 # Create uploads directory
 UPLOADS_DIR = ROOT_DIR / 'uploads'
-UPLOADS_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Create the main app without a prefix
-app = FastAPI()
-
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
-
-
-# Define Models
+# Models
 class ComponentNames(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -81,38 +96,42 @@ class Site(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-# Default component names
+# Defaults
 DEFAULT_COMPONENT_NAMES = [
-    "Antenna Front View",
-    "Antenna Side View",
-    "Antenna Top View",
-    "Cable Routing",
-    "Equipment Rack",
-    "Power Connection",
-    "Grounding System",
-    "Site Overview",
-    "Mounting Hardware",
-    "Weather Proofing",
-    "Signal Meter Reading",
-    "Installation Label",
-    "Safety Equipment"
+    "A6 Grounding",
+    "Azimuth",
+    "Clutter",
+    "CPRI Grounding",
+    "CPRI Termination At A6",
+    "CPRI Termination At CSS",
+    "Grounding At OGB Tower",
+    "Installation",
+    "Labelling",
+    "MCB Termination",
+    "Roxtec",
+    "Tilt",
+    "Tower Photo"
 ]
 
 
 def apply_naming_format(format_str: str, site_id: str, category: str, component_name: str) -> str:
     """Apply the naming format with the provided values"""
-    # Sanitize component name
     safe_component = component_name.replace(' ', '_').replace('/', '_')
-    
-    # Replace placeholders
     result = format_str.replace('{site_id}', site_id)
     result = result.replace('{category}', category.lower())
     result = result.replace('{component_name}', safe_component)
-    
-    # Remove any remaining invalid characters
     result = re.sub(r'[^a-zA-Z0-9_-]', '_', result)
-    
     return result
+
+
+def _sanitize_filename(name: str) -> str:
+    # Keep letters, numbers, dash, underscore and dot (for ext). Replace others with underscore
+    name = os.path.basename(name)
+    name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+    # Prevent names starting with dot
+    if name.startswith('.'):
+        name = name.lstrip('.')
+    return name or 'file'
 
 
 @api_router.get("/")
@@ -122,10 +141,8 @@ async def root():
 
 @api_router.get("/component-names")
 async def get_component_names():
-    """Get the current list of component names"""
     config = await db.component_names.find_one({}, {"_id": 0})
     if not config:
-        # Initialize with defaults
         config_obj = ComponentNames(names=DEFAULT_COMPONENT_NAMES)
         doc = config_obj.model_dump()
         doc['updated_at'] = doc['updated_at'].isoformat()
@@ -136,14 +153,11 @@ async def get_component_names():
 
 @api_router.put("/component-names")
 async def update_component_names(input: ComponentNamesUpdate):
-    """Update the list of component names"""
     if len(input.names) < 1:
         raise HTTPException(status_code=400, detail="Must provide at least 1 component name")
-    
     config_obj = ComponentNames(names=input.names)
     doc = config_obj.model_dump()
     doc['updated_at'] = doc['updated_at'].isoformat()
-    
     await db.component_names.delete_many({})
     await db.component_names.insert_one(doc)
     return {"names": input.names, "message": "Component names updated successfully"}
@@ -151,10 +165,8 @@ async def update_component_names(input: ComponentNamesUpdate):
 
 @api_router.get("/category-names")
 async def get_category_names():
-    """Get the current category names"""
     config = await db.category_names.find_one({}, {"_id": 0})
     if not config:
-        # Initialize with defaults
         config_obj = CategoryNames()
         doc = config_obj.model_dump()
         doc['updated_at'] = doc['updated_at'].isoformat()
@@ -165,11 +177,9 @@ async def get_category_names():
 
 @api_router.put("/category-names")
 async def update_category_names(input: CategoryNamesUpdate):
-    """Update the category names"""
     config_obj = CategoryNames(categories=input.categories)
     doc = config_obj.model_dump()
     doc['updated_at'] = doc['updated_at'].isoformat()
-    
     await db.category_names.delete_many({})
     await db.category_names.insert_one(doc)
     return {"categories": input.categories, "message": "Category names updated successfully"}
@@ -177,10 +187,8 @@ async def update_category_names(input: CategoryNamesUpdate):
 
 @api_router.get("/naming-format")
 async def get_naming_format():
-    """Get the current naming format"""
     config = await db.naming_format.find_one({}, {"_id": 0})
     if not config:
-        # Initialize with default
         config_obj = NamingFormat()
         doc = config_obj.model_dump()
         doc['updated_at'] = doc['updated_at'].isoformat()
@@ -191,15 +199,11 @@ async def get_naming_format():
 
 @api_router.put("/naming-format")
 async def update_naming_format(input: NamingFormatUpdate):
-    """Update the naming format"""
-    # Validate that format contains at least one placeholder
     if not any(placeholder in input.format for placeholder in ['{site_id}', '{category}', '{component_name}']):
         raise HTTPException(status_code=400, detail="Format must contain at least one placeholder: {site_id}, {category}, or {component_name}")
-    
     config_obj = NamingFormat(format=input.format)
     doc = config_obj.model_dump()
     doc['updated_at'] = doc['updated_at'].isoformat()
-    
     await db.naming_format.delete_many({})
     await db.naming_format.insert_one(doc)
     return {"format": input.format, "message": "Naming format updated successfully"}
@@ -212,43 +216,50 @@ async def upload_image(
     component_name: str,
     file: UploadFile = File(...)
 ):
-    """Upload an image for a specific site, category, and component"""
     if category.lower() not in ['alpha', 'beta', 'gamma']:
         raise HTTPException(status_code=400, detail="Category must be alpha, beta, or gamma")
-    
-    # Get naming format
     naming_config = await db.naming_format.find_one({}, {"_id": 0})
     format_str = naming_config.get('format', "{site_id}_{category}_{component_name}") if naming_config else "{site_id}_{category}_{component_name}"
-    
-    # Create directory structure
     site_dir = UPLOADS_DIR / site_id / category.lower()
     site_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Get file extension
-    ext = Path(file.filename).suffix
-    
-    # Apply naming format
+    # sanitize incoming filename extension and generated name
+    incoming_ext = Path(file.filename).suffix.lower()
+    if incoming_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"File type not allowed: {incoming_ext}")
+
     filename_without_ext = apply_naming_format(format_str, site_id, category, component_name)
-    new_filename = f"{filename_without_ext}{ext}"
-    
+    safe_filename_base = _sanitize_filename(filename_without_ext)
+    new_filename = f"{safe_filename_base}{incoming_ext}"
     file_path = site_dir / new_filename
-    
-    # Save file
-    async with aiofiles.open(file_path, 'wb') as out_file:
-        content = await file.read()
-        await out_file.write(content)
-    
-    # Update database
+
+    # Stream the upload to disk and enforce max size to avoid memory and disk exhaustion
+    total_written = 0
+    CHUNK = 64 * 1024
+    try:
+        async with aiofiles.open(file_path, 'wb') as out_file:
+            while True:
+                chunk = await file.read(CHUNK)
+                if not chunk:
+                    break
+                total_written += len(chunk)
+                if total_written > MAX_UPLOAD_SIZE:
+                    # cleanup partial file
+                    await out_file.close()
+                    try:
+                        file_path.unlink()
+                    except Exception:
+                        pass
+                    raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_UPLOAD_SIZE} bytes")
+                await out_file.write(chunk)
+    finally:
+        await file.close()
     site = await db.sites.find_one({"site_id": site_id}, {"_id": 0})
-    
     uploaded_image = {
         "component_name": component_name,
         "filename": new_filename,
         "uploaded_at": datetime.now(timezone.utc).isoformat()
     }
-    
     if not site:
-        # Create new site
         site_obj = Site(
             site_id=site_id,
             categories=[{
@@ -261,34 +272,19 @@ async def upload_image(
         doc['updated_at'] = doc['updated_at'].isoformat()
         await db.sites.insert_one(doc)
     else:
-        # Update existing site
         category_found = False
         for cat in site.get('categories', []):
-            if cat['category'] == category.lower():
-                # Remove old image for this component if exists
-                old_images = [img for img in cat['images'] if img['component_name'] == component_name]
-                if old_images:
-                    # Delete old file
-                    old_file_path = site_dir / old_images[0]['filename']
-                    if old_file_path.exists():
-                        old_file_path.unlink()
-                
-                cat['images'] = [img for img in cat['images'] if img['component_name'] != component_name]
-                cat['images'].append(uploaded_image)
+            if cat.get('category') == category.lower():
+                cat.setdefault('images', []).append(uploaded_image)
                 category_found = True
                 break
-        
         if not category_found:
-            if 'categories' not in site:
-                site['categories'] = []
-            site['categories'].append({
+            site.setdefault('categories', []).append({
                 "category": category.lower(),
                 "images": [uploaded_image]
             })
-        
         site['updated_at'] = datetime.now(timezone.utc).isoformat()
-        await db.sites.update_one({"site_id": site_id}, {"$set": site})
-    
+        await db.sites.update_one({"site_id": site_id}, {"$set": {"categories": site['categories'], "updated_at": site['updated_at']}})
     return {
         "message": "Image uploaded successfully",
         "filename": new_filename,
@@ -298,39 +294,31 @@ async def upload_image(
 
 @api_router.get("/sites/{site_id}/category/{category}")
 async def get_category_images(site_id: str, category: str):
-    """Get all uploaded images for a specific site and category"""
     site = await db.sites.find_one({"site_id": site_id}, {"_id": 0})
-    
     if not site:
         return {"images": []}
-    
     for cat in site.get('categories', []):
-        if cat['category'] == category.lower():
-            return {"images": cat['images']}
-    
+        if cat.get('category') == category.lower():
+            return {"images": cat.get('images', [])}
     return {"images": []}
 
 
 @api_router.get("/sites/{site_id}/download")
 async def download_site_images(site_id: str):
-    """Download all images for a site as a ZIP file"""
     site_dir = UPLOADS_DIR / site_id
-    
     if not site_dir.exists():
-        raise HTTPException(status_code=404, detail="No images found for this site")
-    
-    # Create ZIP file
+        raise HTTPException(status_code=404, detail="Site not found or no uploads")
     zip_path = UPLOADS_DIR / f"{site_id}.zip"
-    
+    # Overwrite if exists
+    if zip_path.exists():
+        zip_path.unlink()
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for category in ['alpha', 'beta', 'gamma']:
-            category_dir = site_dir / category
-            if category_dir.exists():
-                for file_path in category_dir.iterdir():
-                    if file_path.is_file():
-                        arcname = f"{site_id}/{category}/{file_path.name}"
-                        zipf.write(file_path, arcname=arcname)
-    
+        for root, _, files in os.walk(site_dir):
+            for fname in files:
+                full = Path(root) / fname
+                # Keep the archive paths relative to the site's directory
+                arcname = full.relative_to(site_dir)
+                zipf.write(full, arcname)
     return FileResponse(
         path=zip_path,
         filename=f"{site_id}_images.zip",
@@ -338,26 +326,34 @@ async def download_site_images(site_id: str):
     )
 
 
-# Include the router in the main app
+# Include router & static
 app.include_router(api_router)
-
-# Mount static files for serving uploaded images
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def verify_db_connection():
+    try:
+        await client.admin.command("ping")
+        logger.info("Connected to MongoDB (%s)", db_name)
+        # Ensure an index on site_id exists for quick lookups (idempotent)
+        try:
+            await db.sites.create_index("site_id", unique=True)
+            logger.info("Ensured index on sites.site_id")
+        except Exception:
+            logger.exception("Could not create index on sites.site_id (may already exist or insufficient permissions)")
+    except Exception as e:
+        logger.exception("Failed to connect to MongoDB: %s", e)
+        raise
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
