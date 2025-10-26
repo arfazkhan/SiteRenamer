@@ -176,6 +176,27 @@ const UploadPage = () => {
     }
   };
 
+  const handleDeleteImage = async (componentName) => {
+    if (!window.confirm(`Are you sure you want to delete the image for ${componentName}?`)) {
+      return;
+    }
+
+    try {
+      const filename = uploadedImages[componentName];
+      if (!filename) return;
+
+      await axios.delete(
+        `${API}/sites/${siteId}/category/${activeCategory}/image/${encodeURIComponent(filename)}`
+      );
+      
+      toast.success(`Image deleted successfully`);
+      fetchCategoryImages(activeCategory);
+    } catch (error) {
+      console.error('Error deleting image:', error);
+      toast.error('Failed to delete image');
+    }
+  };
+
   const handleSaveComponentNames = async () => {
     try {
       await axios.put(`${API}/component-names`, {
@@ -418,6 +439,32 @@ const UploadPage = () => {
                           data-testid={`replace-image-btn-${index}`}
                         >
                           Replace Image
+                        </button>
+                        <button
+                          className="delete-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteImage(componentName);
+                          }}
+                          style={{
+                            background: '#fed7d7',
+                            color: '#c53030',
+                            border: 'none',
+                            borderRadius: '6px',
+                            padding: '0.5rem 1rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            fontWeight: '600',
+                            transition: 'background 0.2s',
+                          }}
+                          data-testid={`delete-image-btn-${index}`}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#fc8181'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = '#fed7d7'}
+                        >
+                          <Trash2 size={16} />
+                          Delete
                         </button>
                       </div>
                     </>

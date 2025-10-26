@@ -402,6 +402,51 @@ async def get_category_images(site_id: str, category: str):
     return {"images": []}
 
 
+@api_router.delete("/sites/{site_id}/category/{category}/image/{filename}")
+async def delete_image(site_id: str, category: str, filename: str):
+    """
+    Delete an image from a specific category.
+    Removes the file from disk and updates MongoDB to remove the image entry.
+    """
+    # Construct file path
+    file_path = UPLOADS_DIR / site_id / category.lower() / filename
+    
+    # Check if file exists and delete it
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+    else:
+        raise HTTPException(status_code=404, detail="Image file not found")
+    
+    # Update MongoDB to remove the image from the category's images array
+    site = await db.sites.find_one({"site_id": site_id})
+    if not site:
+        raise HTTPException(status_code=404, detail="Site not found")
+    
+    updated = False
+    for cat in site.get('categories', []):
+        if cat.get('category') == category.lower():
+            images = cat.get('images', [])
+            # Remove the image entry matching the filename
+            updated_images = [img for img in images if img.get('filename') != filename]
+            if len(updated_images) < len(images):
+                cat['images'] = updated_images
+                updated = True
+            break
+    
+    if updated:
+        site['updated_at'] = datetime.now(timezone.utc).isoformat()
+        await db.sites.update_one(
+            {"site_id": site_id},
+            {"$set": {"categories": site['categories'], "updated_at": site['updated_at']}}
+        )
+        return {"message": "Image deleted successfully", "filename": filename}
+    else:
+        raise HTTPException(status_code=404, detail="Image not found in database")
+
+
 @api_router.get("/sites/{site_id}/download")
 async def download_site_images(site_id: str):
     site_dir = UPLOADS_DIR / site_id
@@ -436,18 +481,19 @@ async def download_site_images(site_id: str):
                     # Compute the desired archive filename using current naming format
                     expected_base = apply_naming_format(format_str, site_id, display_category, comp_name)
                     expected_safe = _sanitize_filename(expected_base) + Path(fname_on_disk).suffix
-                    # ZIP structure: {site_id}/{site_id}_{category}/images...
-                    # e.g., "asdas/asdas_-1/asdas_-1_Azimuth.png"
-                    safe_site_id = site_id.replace('/', '_').replace(' ', '_')
-                    safe_display_category = str(display_category).replace('/', '_').replace(' ', '_')
-                    arcname = Path(safe_site_id) / f"{safe_site_id}_{safe_display_category}" / expected_safe
+                    # ZIP structure: {site_id}/{site_id} {category}/images...
+                    # e.g., "asdas/asdas -1/asdas_-1_Azimuth.png"
+                    # Keep spaces in folder names, only replace slashes
+                    safe_site_id = site_id.replace('/', '_')
+                    safe_display_category = str(display_category).replace('/', '_')
+                    arcname = Path(safe_site_id) / f"{safe_site_id} {safe_display_category}" / expected_safe
                     if not file_path.exists():
                         # skip missing files
                         continue
                     zipf.write(file_path, arcname)
         else:
             # Fallback: include all files on disk in their current layout
-            safe_site_id = site_id.replace('/', '_').replace(' ', '_')
+            safe_site_id = site_id.replace('/', '_')
             for root, _, files in os.walk(site_dir):
                 for fname in files:
                     full = Path(root) / fname
