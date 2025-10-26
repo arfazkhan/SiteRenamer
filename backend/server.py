@@ -80,6 +80,11 @@ async def lifespan(app: FastAPI):
         # re-raise to stop startup
         raise
 
+    # Detect running on Vercel (serverless) where filesystem is ephemeral
+    vercel_detected = bool(os.environ.get('VERCEL') or os.environ.get('VERCEL_URL') or os.environ.get('VERCEL_ENV') or os.environ.get('NOW_REGION'))
+    if vercel_detected:
+        logger.warning("Running on Vercel or similar serverless environment. Filesystem is ephemeral — uploaded files will not persist between invocations.")
+
     try:
         yield
     finally:
@@ -419,6 +424,39 @@ async def download_site_images(site_id: str):
         filename=f"{site_id}_images.zip",
         media_type='application/zip'
     )
+
+
+@api_router.get("/health")
+async def health_check():
+    """Health endpoint for quick runtime checks.
+
+    Returns DB connectivity status, presence of required env vars, and whether
+    the runtime appears to be a serverless/ephemeral environment (Vercel).
+    """
+    db_ok = False
+    db_error = None
+    try:
+        await client.admin.command("ping")
+        db_ok = True
+    except Exception as e:
+        db_error = str(e)
+
+    env_status = {
+        'MONGO_URL': bool(os.environ.get('MONGO_URL')),
+        'DB_NAME': bool(os.environ.get('DB_NAME'))
+    }
+
+    vercel_detected = bool(os.environ.get('VERCEL') or os.environ.get('VERCEL_URL') or os.environ.get('VERCEL_ENV') or os.environ.get('NOW_REGION'))
+
+    payload = {
+        'status': 'ok' if db_ok else 'error',
+        'db_connected': db_ok,
+        'db_error': db_error,
+        'env': env_status,
+        'ephemeral_filesystem': vercel_detected,
+        'message': 'Running on Vercel - filesystem is ephemeral; uploads will be transient' if vercel_detected else 'running'
+    }
+    return payload
 
 
 # Include router & static

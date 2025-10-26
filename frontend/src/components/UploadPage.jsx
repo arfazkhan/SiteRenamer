@@ -5,6 +5,14 @@ import axios from 'axios';
 import { toast } from 'sonner';
 
 const BACKEND_URL = (process.env.REACT_APP_BACKEND_URL || '').replace(/\/+$/g, '');
+if (!BACKEND_URL) {
+  // Warn at runtime if the build did not inject a backend URL. When deployed, React
+  // builds embed env vars at build time, so missing REACT_APP_BACKEND_URL will cause
+  // the frontend to call its own origin (/api/*) which often results in 404s.
+  // This console warning helps debug misconfigured Vercel env vars.
+  // eslint-disable-next-line no-console
+  console.warn('REACT_APP_BACKEND_URL is not set. Frontend will call same origin for API requests (/api/*).');
+}
 const API = `${BACKEND_URL}/api`;
 
 const UploadPage = () => {
