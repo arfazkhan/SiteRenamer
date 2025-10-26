@@ -28,9 +28,26 @@ logger = logging.getLogger(__name__)
 # MongoDB connection (Atlas-compatible)
 mongo_url = os.environ.get('MONGO_URL')
 if not mongo_url:
-    raise RuntimeError("MONGO_URL not set. Add your MongoDB Atlas connection string to backend/.env")
+    raise RuntimeError("MONGO_URL not set. Add your MongoDB Atlas connection string to backend/.env or set it in the environment")
+# Trim surrounding whitespace and quotes which commonly appear when copying env values from some UIs
+mongo_url = mongo_url.strip()
+if (mongo_url.startswith('"') and mongo_url.endswith('"')) or (mongo_url.startswith("'") and mongo_url.endswith("'")):
+    mongo_url = mongo_url[1:-1]
+
 client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
-db_name = os.environ.get('DB_NAME', 'site_renamer')
+
+# Read and sanitize DB_NAME
+raw_db_name = os.environ.get('DB_NAME', 'site_renamer')
+db_name = str(raw_db_name).strip()
+if (db_name.startswith('"') and db_name.endswith('"')) or (db_name.startswith("'") and db_name.endswith("'")):
+    # strip surrounding quotes
+    db_name = db_name[1:-1]
+# Defensive: remove accidental trailing/leading whitespace and control chars
+db_name = db_name.strip()
+if '"' in db_name or "'" in db_name:
+    # If quotes remain inside the name, log and raise a clear error
+    raise RuntimeError(f"DB_NAME contains invalid quote characters after sanitization: {db_name!r}. Remove quotes from the environment variable.")
+
 db = client[db_name]
 
 # Production / operational settings (can be tuned via env)
