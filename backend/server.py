@@ -436,22 +436,23 @@ async def download_site_images(site_id: str):
                     # Compute the desired archive filename using current naming format
                     expected_base = apply_naming_format(format_str, site_id, display_category, comp_name)
                     expected_safe = _sanitize_filename(expected_base) + Path(fname_on_disk).suffix
-                    # Use the display category as the folder name inside the archive so
-                    # edited category names (e.g., "-1") appear in the ZIP instead of the
-                    # internal key (e.g., "alpha"). Sanitize the display label for folder
-                    # naming (replace slashes and spaces with underscores).
-                    safe_display_folder = str(display_category).replace('/', '_').replace(' ', '_')
-                    arcname = Path(safe_display_folder) / expected_safe
+                    # ZIP structure: {site_id}/{site_id}_{category}/images...
+                    # e.g., "asdas/asdas_-1/asdas_-1_Azimuth.png"
+                    safe_site_id = site_id.replace('/', '_').replace(' ', '_')
+                    safe_display_category = str(display_category).replace('/', '_').replace(' ', '_')
+                    arcname = Path(safe_site_id) / f"{safe_site_id}_{safe_display_category}" / expected_safe
                     if not file_path.exists():
                         # skip missing files
                         continue
                     zipf.write(file_path, arcname)
         else:
             # Fallback: include all files on disk in their current layout
+            safe_site_id = site_id.replace('/', '_').replace(' ', '_')
             for root, _, files in os.walk(site_dir):
                 for fname in files:
                     full = Path(root) / fname
-                    arcname = full.relative_to(site_dir)
+                    rel_path = full.relative_to(site_dir)
+                    arcname = Path(safe_site_id) / rel_path
                     zipf.write(full, arcname)
     return FileResponse(
         path=zip_path,
