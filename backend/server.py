@@ -433,18 +433,18 @@ async def download_site_images(site_id: str):
                     fname_on_disk = img.get('filename')
                     comp_name = img.get('component_name')
                     file_path = site_dir / cat_key / fname_on_disk
+                    # Compute the desired archive filename using current naming format
+                    expected_base = apply_naming_format(format_str, site_id, display_category, comp_name)
+                    expected_safe = _sanitize_filename(expected_base) + Path(fname_on_disk).suffix
+                    # Use the display category as the folder name inside the archive so
+                    # edited category names (e.g., "-1") appear in the ZIP instead of the
+                    # internal key (e.g., "alpha"). Sanitize the display label for folder
+                    # naming (replace slashes and spaces with underscores).
+                    safe_display_folder = str(display_category).replace('/', '_').replace(' ', '_')
+                    arcname = Path(safe_display_folder) / expected_safe
                     if not file_path.exists():
                         # skip missing files
                         continue
-                        # Compute the desired archive filename using current naming format
-                        expected_base = apply_naming_format(format_str, site_id, display_category, comp_name)
-                        expected_safe = _sanitize_filename(expected_base) + Path(fname_on_disk).suffix
-                        # Use the display category as the folder name inside the archive so
-                        # edited category names (e.g., "-1") appear in the ZIP instead of the
-                        # internal key (e.g., "alpha"). Sanitize the display label for folder
-                        # naming (replace slashes and spaces with underscores).
-                        safe_display_folder = str(display_category).replace('/', '_').replace(' ', '_')
-                        arcname = Path(safe_display_folder) / expected_safe
                     zipf.write(file_path, arcname)
         else:
             # Fallback: include all files on disk in their current layout
